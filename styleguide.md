@@ -4,6 +4,8 @@
     - [Комментарии](#комментарии)
     - [Строковые литералы и форматирование](#строковые-литералы-и-форматирование)
     - [Аннотации типов](#аннотации-типов) 
+    - [Разворачивание скобок и запятые](#разворачивание-скобок-и-запятые)
+    - [Именованные аргументы-(kwargs)](#именованные-аргументы-kwargs)
 - [Модели](#модели)
     - [Кастомная валидация](#кастомная-валидация)
     - [Properties](#properties)
@@ -29,6 +31,10 @@
  - [Вещи, которые не стоит забывать при разработке]
 
 ## Общее
+
+**Перед прочтением стайлгайда, настоятельно рекомендуем ознакомиться с:**
+* [PEP8](https://www.python.org/dev/peps/pep-0008/)
+* [Рекомендации по стилю кода от Django](https://docs.djangoproject.com/en/dev/internals/contributing/writing-code/coding-style/)
 
 **В Django, бизнес-логика должна быть в:**
 * В сервисах, которые предназначены именно для этого.
@@ -99,7 +105,7 @@ def __str__(self) -> str:
 #### Соответствие типов в аннотациях
 В некоторых кейсах, позволяется пренебречь точностью типов в аннотациях. Одним из таких может стать избежание циклических импортов, например в сервисе кастомной валидации.
 
-##### Пример
+##### Пример:
 
 Модель транзакции:
 ```python
@@ -115,9 +121,95 @@ class Transaction(models.Model):
 
 Сервис валидации:
 ```python
-class TransactionValidationService^
+class TransactionValidationService:
 	@staticmethod
 	def validate(transaction: Any) -> None: # несоответствие с фактическим типом
 		...
 ```
 В этом случае, при попытке импорта модели транзакции в сервис валидации, произойдет `ImportError`, а именно ошибка циклического импорта.
+
+### Разворачивание скобок и запятые
+Как и советуется в рекомендациях Django, если вызов некой функции или метод не вместить в одну строку, то используется `multiline hanging indentation`.
+
+#### Примеры:
+
+Модели:
+```python
+class Transaction(models.Model):
+	parent_transaction = models.ForeignKey(
+        to='self',
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name='child_transactions',
+        verbose_name=_('Parent transaction'),
+    )
+```
+
+ORM запросы:
+```python
+sent_transactions_sum = wallet.sent_transactions.exclude(
+    status__in=exclude_statuses,
+).filter(
+    created_at__gt=last_daily_balance.day,
+).aggregate(total=Sum('amount'))['total']
+```
+
+Объявление метода/функции:
+```python
+@classmethod
+def _get_balance_for_multiple(
+    cls,
+    wallets: QuerySet[Wallet],
+    currency: str,
+    backend: ExchangeBackend,
+) -> Money:
+	...
+```
+
+Также, стоит обратить внимание, на необходимость ставить `trailing comma` - "конечную запятую", после последнего элемента мультилайн вызова или перечисления.
+
+```python
+class ProviderAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'name',
+        'daily_transactions_count_limit',
+        'wallet_daily_transactions_count_limit',
+        'bank_name',
+        'bank_address',
+        'swift', # trailing comma
+    )
+```
+
+Иногда, появляется необходимость развернуть `list comprehension`, мультилайн условие и т.д. Здесь, в первую очередь, нужно подумать о простоте и понятности кода. Если блок кода достаточно прост, понятен и выглядит лаконично, то позволяется равзернуть его. В этих случаях, операторы или ключевые слова должны находиться в начале новой строки.
+
+List comprehension:
+```python
+return [
+     {'amount': balance.amount, 'amount_currency': str(balance.currency)}
+     for balance in balances
+ ]
+```
+
+Объявление композитной переменной:
+```python
+amount = Decimal(
+    last_daily_balance.amount.amount
+    + received_transactions_sum
+    - sent_transactions_sum
+    - debts_sum,
+)
+```
+
+Условие:
+```python
+if (
+    provider_withdraw_transactions_count_for_today
+    >= wallet.provider.daily_transactions_count_limit
+):
+    raise ValidationError(cls.Error.PROVIDER_DAILY_LIMIT)
+```
+
+### Именованные аргументы (kwargs)
+Неименованные аргументы позволяются, только в случае, если название параметра совпадает с названием переменной, которая передаётся в неё. В любом ином кейсе, ради избежания путаницы, необходимо использовать именованные аргументы.
