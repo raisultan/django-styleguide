@@ -25,6 +25,8 @@
   - [Наш подход к написанию и хранению бизнес-логики](#наш-подход-к-написанию-и-хранению-бизнес-логики)
   - [Нейминг сервисов](#нейминг-сервисов)
   - [Нейминг методов](#нейминг-методов)
+- [APIViews & ViewSets](#apiviews--viewsets)
+  - [Нейминг](#нейминг)
 
 ## Общее
 
@@ -555,4 +557,69 @@ class FeeCalculationService:
             rounding=ROUND_DOWN,
         )
         return available_amount if available_amount > 0 else Decimal(0)
+```
+
+## APIViews & ViewSets
+APIView или ViewSet, кроме бойлерплейт кода, могут содержать:
+- вызов методов сервисов
+- обработку ошибок
+
+Критерии выбора ViewSet:
+- требуется реализовать несколько эндпоинтов для некой модели, т.е. несколько действий над моделью
+- несколько эндпоинтов имеют общий неймспейс
+
+Остальные случаи могут быть покрыты использованием APIView дженериками.
+
+### Нейминг
+Нейминг APIView и ViewSet-ов схож с неймингом сервисов, за исключением того, что вместо `Service` используется постфикс `APIView` или `ViewSet`, в зависимости от использования того или дженерика.
+
+**Пример ViewSet-а**:
+```python
+class TransactionViewSet(ModelViewSet):
+    filter_backends = (DjangoFilterBackend, OrderingFilter, SearchFilter)
+    ordering_fields = ('created_at', 'completed_at', 'amount')
+    filterset_class = TransactionFilterSet
+    search_fields = ('verbose_id',)
+    queryset = Transaction.objects.all()
+    pagination_class = TransactionViewSetPagination
+
+    def get_permissions(self):
+        if self.action == 'list':
+            permission_classes = (Is2FAuthenticated, DjangoModelPermissionsWithRead)
+        else:
+            permission_classes = (Is2FActionAllowed, DjangoModelPermissionsWithRead)
+        return [permission() for permission in permission_classes]
+
+    def get_serializer_class(self) -> ModelSerializer:
+        if self.action == 'create_withdraw':
+            return TransactionCreateWithdrawSerializer
+        if self.action == 'create_move':
+            return TransactionCreateMoveSerializer
+        if self.action == 'list':
+            return TransactionListSerializer
+        return TransactionRetrieveSerializer
+
+    @action(['post'], detail=False)
+    def create_withdraw(self, request: HttpRequest, *args, **kwargs) -> Response:
+        return self.create(request, *args, **kwargs)
+
+    @action(['post'], detail=False)
+    def create_move(self, request: HttpRequest, *args, **kwargs) -> Response:
+        return self.create(request, *args, **kwargs)
+
+    def get_queryset(self) -> QuerySet:
+        user = self.request.user
+        if user.is_officer:
+            return (
+                Transaction.objects.all()
+                if self.request.method in SAFE_METHODS
+                else Transaction.objects.none()
+            )
+        elif self.request.method not in SAFE_METHODS:  # user is client
+            return Transaction.objects.filter(
+                sender__owner=user,
+                is_scheduled=True,
+                status=Transaction.Status.PROCESSING_INTERNAL,
+            )
+        return Transaction.objects.filter(sender__owner=user)
 ```
