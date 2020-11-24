@@ -284,7 +284,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     user_type = models.CharField(
         max_length=10,
         blank=True,
-        choices=ClientType.choices,
+        choices=Type.choices,
         verbose_name=_('User type'),
     )
     created_at = models.DateTimeField(
