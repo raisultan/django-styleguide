@@ -24,6 +24,7 @@
   - [Бизнес-логика в сервисах и селекторах](#бизнес-логика-в-сервисах-и-селекторах)
   - [Наш подход к написанию и хранению бизнес-логики](#наш-подход-к-написанию-и-хранению-бизнес-логики)
   - [Нейминг сервисов](#нейминг-сервисов)
+  - [Нейминг методов](#нейминг-методов)
 
 ## Общее
 
@@ -366,3 +367,101 @@ class User(AbstractBaseUser, PermissionsMixin):
 Базовый шаблон для нейминга сервисов - `<Entity><Action>Service`, например `TransactionCreationService`, здесь в качестве сущности над которой производится действие выступает `Transaction` - транзакция, само действие - `Creation` - создание. Тем самым получается "сервис создания транзакции".
 
 Но иногда требуется нейминг по сложнее, предположим кейс, есть сервис валидации транзакции, но поскольку валидация является обширной и сама по себе несёт много логики, решается разделить валидацию в несколько сервисов, а в корневом это маппить или как-то диспатчить. В этом случае, расширяется `Entity` и шаблон приходит к такому виду `<Type><Entity><Action>Service`, здесь `<Type>` это свойство по которому будет происходить маппинг сервисов, в итоге у нас будет `WithdrawTransactionValidationService`.
+
+### Нейминг методов
+Нейминг методов в сервисах производится по двум шаблонам, которые применяются базируясь на типе сервиса:
+- если сервис реализует логику основывающуюся на имеющейся сущности, т.е. модели, то используется `<action>()`, здесь `<acton>` подразумевает короткое описание действия, например `calculate_sender_balance`.
+- если сервис реализуют специфичную общую логику, но не базируется на имеющейся сущности - `<entity>_<action>()`, под этот же кейс попадают редкие, вайлдкард методы, когда имеется сервис некой сущности, но в силу специфики бизнес-логики нужен приватный метод взаимодействующий с иной сущностью, здесь стоит учесть, что этот метод должен следующему критерию: планируемый к реализации метод, по логике не может находиться в другом сервисе или быть свойством модели.
+
+**Пример сервиса**:
+```python
+class TransactionCreationService:
+    class Error:
+        INSUFFICIENT_FUNDS_ON_WALLET = _('Insufficient funds on the wallet')
+
+    @classmethod
+    def create_withdraw(cls, data: dict) -> Transaction:
+        sender = data['sender']
+        state = cls._get_withdraw_transaction_initial_state(data['withdraw_method'])
+        data.update(
+            **cls._get_wallet_balances(sender=sender, amount=data['amount']),
+            transaction_type=Transaction.Type.WITHDRAW,
+            amount_currency=sender.currency,
+            state=state,
+        )
+
+        with transaction.atomic():
+            base_transaction = Transaction.objects.create(**data)
+            fee = FeeService._get_withdraw_fee(base_transaction)
+            cls._transaction_validate_wallet_balance(base_transaction, fee)
+            Transaction.objects.create(
+                **cls._get_wallet_balances(sender=sender, amount=fee),
+                parent_transaction=base_transaction,
+                sender=sender,
+                recipient=cls._get_operational_wallet(sender),
+                amount=fee,
+                transaction_type=Transaction.Type.SERVICE,
+                amount_currency=sender.currency,
+                status=Transaction.Status.COMPLETED,
+            )
+        return base_transaction
+
+    @classmethod
+    def create_move(cls, data: dict) -> Transaction:
+        data = deepcopy(data)
+
+        sender = data['sender']
+        data.update(
+            **cls._get_wallet_balances(sender=sender, amount=data['amount']),
+            transaction_type=Transaction.Type.MOVE,
+            amount_currency=sender.currency,
+        )
+        return Transaction.objects.create(**data)
+
+    @staticmethod
+    def _get_operational_wallet(wallet: Wallet) -> OperationalWallet:
+        return OperationalWallet.objects.get(
+            provider=wallet.provider,
+            currency=wallet.currency,
+            wallet_type=wallet.wallet_type,
+        )
+
+    @staticmethod
+    def _get_withdraw_transaction_initial_state(withdraw_method: WithdrawMethod) -> dict:
+        versions = withdraw_method.version
+        latest_version = max([parser.parse(version_dt) for version_dt in versions.keys()])
+        return {'withdraw_method_version': str(latest_version)}
+
+    @staticmethod
+    def _get_wallet_balances(
+        *args,
+        sender: Wallet = None,
+        recipient: Wallet = None,
+        amount: Decimal,
+    ) -> dict:
+        balance_data = dict()
+        if sender:
+            sender_balance = WalletBalanceService.get_balance(sender)
+            balance_data.update(
+                sender_balance_before=sender_balance,
+                sender_balance_before_currency=sender.currency,
+                sender_balance_after=sender_balance - amount,
+                sender_balance_after_currency=sender.currency,
+            )
+        if recipient:
+            recipient_balance = WalletBalanceService.get_balance(recipient)
+            balance_data.update(
+                recipient_balance_before=recipient_balance,
+                recipient_balance_before_currency=recipient.currency,
+                recipient_balance_after=recipient_balance + amount,
+                recipient_balance_after_currency=recipient.currency,
+            )
+
+        return balance_data
+
+    @classmethod
+    def _transaction_validate_wallet_balance(cls, transaction: Transaction, fee: Decimal) -> None:
+        sender_wallet_balance = WalletBalanceService.get_balance(transaction.sender)
+        if transaction.amount.amount + fee > sender_wallet_balance:
+            raise ValueError(cls.Error.INSUFFICIENT_FUNDS_ON_WALLET)
+```
