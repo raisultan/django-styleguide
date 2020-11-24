@@ -16,6 +16,9 @@
     - [Примеры:](#примеры)
   - [Именованные аргументы (kwargs)](#именованные-аргументы-kwargs)
   - [Инициализаторы пакетов - __init__.py](#инициализаторы-пакетов---initpy)
+- [Модели](#модели)
+  - [Валидация моделей](#валидация-моделей)
+  - [Свойства моделей (@property)](#свойства-моделей-property)
 
 ## Общее
 
@@ -238,3 +241,83 @@ if (
 
 ### Инициализаторы пакетов - __init__.py
 Как и сказано в названии, `__init__.py` файлы являются инициализаторами Python пакетов, ничего кроме инициализации пакета там быть не должно. Они могут содержать только импорты, ничего больше.
+
+
+## Модели
+Корректное определение и написание моделей является одним из самых важных частей в разработке Django приложений, поскольку определяются сущности, вокруг которых будет реализована функциональность продукта.
+
+При написании моделей необходимо придерживаться следующих правил:
+- каждое поле модели должно иметь `verbose_name`
+- скобки каждого поля должны быть развернуты - `multiline hanging indentation` + `trailing_comma`
+- если поля можно группировать логические, то это стоит сделать
+- поля представляющие из себя отношения к другим моделям (OneToOne, ForeignKey, ManyToMany), должны иметь `related_name`
+- поля выборки должны быть реализованы через [Enum типы Django](https://docs.djangoproject.com/en/3.1/ref/models/fields/#enumeration-types)
+- аргументы полей должны передаваться как именованные (kwargs)
+- каждая модель должна иметь свою реализацию метода `__str__`
+
+### Валидация моделей
+Если кастомную валидацию модели возможно реализовать через [constraints](https://docs.djangoproject.com/en/3.1/ref/models/constraints/) или [валидаторами](https://docs.djangoproject.com/en/3.1/ref/validators/) Django, то этот вариант будет лучше. В противоположном случае, стоит учесть несколько пунктов:
+
+Кастомная валидация модели должна быть реализована в методе `clean()`, если:
+- валидации немного (метод `clean()` не должен раздувать модель)
+- валидация не производится по отношениям модели
+
+В любом ином случае, валидация должна иметь свой сервис. Который может вызываться либо в `clean()` модели, либо в сериалайзере.
+Также, при наличии кастомной валидации стоит не забывать вызвать метод `full_clean()`, обычно это происходит в методе `save()` модели.
+
+### Свойства моделей (@property)
+При кейсе, когда требуется наличие полей или свойств, относящиеся к инстансу модели - объекту, которые не хранятся в БД, позволяется использовать `@property`, которое позволят вычислить нужное значение в рантайме. Такие свойства допустимы, если значение вычисляется на основе полей объекта и остаются маленькими, в плане количества строк кода.
+
+**Пример модели:**
+```python
+class User(AbstractBaseUser, PermissionsMixin):
+    class Type(models.TextChoices):
+        ADMIN = 'admin', _('Administrator')
+        ACCOUNTANT = 'accountant', _('Accountant')
+        CLIENT = 'client', _('Client')
+        OFFICER = 'officer', _('Officer')
+
+    email = models.EmailField(
+        unique=True,
+        verbose_name=_('Email'),
+    )
+    user_type = models.CharField(
+        max_length=10,
+        blank=True,
+        choices=ClientType.choices,
+        verbose_name=_('User type'),
+    )
+    created_at = models.DateTimeField(
+        default=timezone.now,
+        verbose_name=_('Created at'),
+    )
+
+    is_verified = models.BooleanField(
+        default=False,
+        verbose_name=_('Is verified'),
+    )
+
+    is_staff = models.BooleanField(
+        default=False,
+        verbose_name=_('Is staff'),
+    )
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name=_('Is active'),
+    )
+
+    def __str__(self) -> str:
+        return self.email
+
+    @property
+    def is_officer(self) -> bool:
+        return self.groups.filter(name__in=self.Group.OFFICER_GROUPS).exists()
+
+    @property
+    def is_client(self) -> bool:
+        return self.groups.filter(name__in=self.Group.CLIENT_GROUPS).exists()
+
+    @property
+    def get_client_group(self) -> Group:
+        return self.groups.filter(name__in=self.Group.CLIENT_GROUPS).first()
+```
