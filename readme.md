@@ -369,99 +369,190 @@ class User(AbstractBaseUser, PermissionsMixin):
 Но иногда требуется нейминг по сложнее, предположим кейс, есть сервис валидации транзакции, но поскольку валидация является обширной и сама по себе несёт много логики, решается разделить валидацию в несколько сервисов, а в корневом это маппить или как-то диспатчить. В этом случае, расширяется `Entity` и шаблон приходит к такому виду `<Type><Entity><Action>Service`, здесь `<Type>` это свойство по которому будет происходить маппинг сервисов, в итоге у нас будет `WithdrawTransactionValidationService`.
 
 ### Нейминг методов
-Нейминг методов в сервисах производится по двум шаблонам, которые применяются базируясь на типе сервиса:
-- если сервис реализует логику основывающуюся на имеющейся сущности, т.е. модели, то используется `<action>()`, здесь `<acton>` подразумевает короткое описание действия, например `calculate_sender_balance`.
-- если сервис реализуют специфичную общую логику, но не базируется на имеющейся сущности - `<entity>_<action>()`, под этот же кейс попадают редкие, вайлдкард методы, когда имеется сервис некой сущности, но в силу специфики бизнес-логики нужен приватный метод взаимодействующий с иной сущностью, здесь стоит учесть, что этот метод должен следующему критерию: планируемый к реализации метод, по логике не может находиться в другом сервисе или быть свойством модели.
-
-**Пример сервиса**:
+Нейминг методов в сервисах производится по шаблону `<action>()` - если метод затрагивает основную модель для которой сервис и пишется:
 ```python
-class TransactionCreationService:
+class FeeCalculationService:
+    @classmethod
+    def get_topup_fee(cls, transaction) -> Decimal:
+        ...
+```
+
+Или `<entity><action>()`, если это сервис реализующий некую общую логику, который не базируется на существующей модели, так же в случае если в сервисе модели происходит обращение к другой сущности:
+```python
+@classmethod
+def wallet_get_monthly_maintenance_fee(cls, wallet: Wallet, user_group: Group):
+    ...
+```
+
+**Пример полноценного сервиса**:
+```python
+class FeeCalculationService:
+    AVAILABLE_AMOUNT_ROUNDING_FORMAT: Final = Decimal('.01')
+
     class Error:
-        INSUFFICIENT_FUNDS_ON_WALLET = _('Insufficient funds on the wallet')
+        INVALID_BASE_FEE = 'Invalid base fee received'
 
     @classmethod
-    def create_withdraw(cls, data: dict) -> Transaction:
-        sender = data['sender']
-        state = cls._get_withdraw_transaction_initial_state(data['withdraw_method'])
-        data.update(
-            **cls._get_wallet_balances(sender=sender, amount=data['amount']),
-            transaction_type=Transaction.Type.WITHDRAW,
-            amount_currency=sender.currency,
-            state=state,
-        )
-
-        with transaction.atomic():
-            base_transaction = Transaction.objects.create(**data)
-            fee = FeeService._get_withdraw_fee(base_transaction)
-            cls._transaction_validate_wallet_balance(base_transaction, fee)
-            Transaction.objects.create(
-                **cls._get_wallet_balances(sender=sender, amount=fee),
-                parent_transaction=base_transaction,
-                sender=sender,
-                recipient=cls._get_operational_wallet(sender),
-                amount=fee,
-                transaction_type=Transaction.Type.SERVICE,
-                amount_currency=sender.currency,
-                status=Transaction.Status.COMPLETED,
-            )
-        return base_transaction
+    def transaction_get_fee(cls, transaction: Transaction) -> Decimal:
+        if transaction.transaction_type == Transaction.Type.WITHDRAW:
+            fee = cls._get_withdraw_fee(transaction)
+        elif transaction.transaction_type == Transaction.Type.TOPUP:
+            fee = cls._get_topup_fee(transaction)
+        else:
+            raise ValueError('Invalid transaction type received')
+        return fee
 
     @classmethod
-    def create_move(cls, data: dict) -> Transaction:
-        data = deepcopy(data)
-
-        sender = data['sender']
-        data.update(
-            **cls._get_wallet_balances(sender=sender, amount=data['amount']),
-            transaction_type=Transaction.Type.MOVE,
-            amount_currency=sender.currency,
+    def _get_topup_fee(cls, transaction) -> Decimal:
+        base_fee = cls._get_base_fee(
+            wallet=transaction.sender,
+            user_group=transaction.sender.owner.get_client_group,
+            operation_type=BaseFee.OperationType.TOPUP,
+            financial_zone=BaseFee.FinancialZone.EUROPE,
         )
-        return Transaction.objects.create(**data)
+        return cls._transaction_get_final_fee(transaction, base_fee)
+
+    @classmethod
+    def _get_withdraw_fee(cls, transaction) -> Decimal:
+        base_fee = cls._get_base_fee(
+            wallet=transaction.sender,
+            user_group=transaction.sender.owner.get_client_group,
+            operation_type=BaseFee.OperationType.WITHDRAW,
+            financial_zone=BaseFee.FinancialZone.EUROPE,
+        )
+        return cls._transaction_get_final_fee(transaction, base_fee)
+
+    @classmethod
+    def wallet_get_monthly_maintenance_fee(cls, wallet: Wallet, user_group: Group) -> Decimal:
+        base_fee = cls._get_base_fee(
+            wallet=wallet,
+            user_group=user_group,
+            operation_type=BaseFee.OperationType.WALLET_MONTHLY_MAINTENANCE,
+            financial_zone=BaseFee.FinancialZone.EUROPE,
+        )
+        return cls._get_fixed_fee(base_fee, wallet.currency)
+
+    @classmethod
+    def wallet_get_creation_fee(cls, wallet: Wallet, user_group: Group) -> Decimal:
+        base_fee = cls._get_base_fee(
+            wallet=wallet,
+            user_group=user_group,
+            operation_type=BaseFee.OperationType.WALLET_CREATION,
+            financial_zone=BaseFee.FinancialZone.EUROPE,
+        )
+        return cls._get_fixed_fee(base_fee, wallet.currency)
+
+    @classmethod
+    def _get_fixed_fee(cls, base_fee: BaseFee, currency: str) -> Decimal:
+        return FixedFee.objects.filter(
+            base_fee=base_fee,
+            amount_currency=currency,
+        ).first().amount.amount
+
+    @classmethod
+    def _get_percentage_fee(
+        cls,
+        fee: PercentageFee,
+        transaction_amount: Decimal,
+    ) -> Decimal:
+        calculated_fee = Decimal((transaction_amount / 100) * fee.amount)
+        if fee.min_amount.amount and calculated_fee < fee.min_amount.amount:
+            return fee.min_amount.amount
+        elif fee.max_amount.amount and calculated_fee > fee.max_amount.amount:
+            return fee.max_amount.amount
+        return fee
+
+    @classmethod
+    def _transaction_get_final_fee(cls, transaction: Transaction, base_fee: BaseFee) -> Decimal:
+        if fee := getattr(base_fee, 'fixed_fee', None):
+            return cls._get_fixed_fee(base_fee, transaction.amount.currency)
+        elif fee := getattr(base_fee, 'percentage_fee', None):
+            return cls._get_percentage_fee(fee, transaction.amount.amount)
+        else:
+            raise ValueError(cls.Error.INVALID_BASE_FEE)
 
     @staticmethod
-    def _get_operational_wallet(wallet: Wallet) -> OperationalWallet:
-        return OperationalWallet.objects.get(
+    def _get_base_fee(
+        wallet: Wallet,
+        user_group: Group,
+        operation_type: Tuple[str, str],
+        financial_zone: Tuple[str, str],
+    ) -> BaseFee:
+        base_fee = BaseFee.objects.filter(
             provider=wallet.provider,
-            currency=wallet.currency,
             wallet_type=wallet.wallet_type,
-        )
+            group=user_group,
+            operation_type=operation_type,
+            financial_zone=financial_zone,
+        ).select_related(
+            'percentage_fee',
+            'fixed_fee',
+        ).first()
 
-    @staticmethod
-    def _get_withdraw_transaction_initial_state(withdraw_method: WithdrawMethod) -> dict:
-        versions = withdraw_method.version
-        latest_version = max([parser.parse(version_dt) for version_dt in versions.keys()])
-        return {'withdraw_method_version': str(latest_version)}
-
-    @staticmethod
-    def _get_wallet_balances(
-        *args,
-        sender: Wallet = None,
-        recipient: Wallet = None,
-        amount: Decimal,
-    ) -> dict:
-        balance_data = dict()
-        if sender:
-            sender_balance = WalletBalanceService.get_balance(sender)
-            balance_data.update(
-                sender_balance_before=sender_balance,
-                sender_balance_before_currency=sender.currency,
-                sender_balance_after=sender_balance - amount,
-                sender_balance_after_currency=sender.currency,
-            )
-        if recipient:
-            recipient_balance = WalletBalanceService.get_balance(recipient)
-            balance_data.update(
-                recipient_balance_before=recipient_balance,
-                recipient_balance_before_currency=recipient.currency,
-                recipient_balance_after=recipient_balance + amount,
-                recipient_balance_after_currency=recipient.currency,
-            )
-
-        return balance_data
+        if not base_fee:
+            raise BaseFee.DoesNotExist
+        return base_fee
 
     @classmethod
-    def _transaction_validate_wallet_balance(cls, transaction: Transaction, fee: Decimal) -> None:
-        sender_wallet_balance = WalletBalanceService.get_balance(transaction.sender)
-        if transaction.amount.amount + fee > sender_wallet_balance:
-            raise ValueError(cls.Error.INSUFFICIENT_FUNDS_ON_WALLET)
+    def wallet_get_withdraw_info(cls, wallet: Wallet) -> dict:
+        actual_balance = WalletBalanceService.get_balance(wallet)
+        base_fee = cls._get_base_fee(
+            wallet=wallet,
+            user_group=wallet.owner.get_client_group,
+            operation_type=BaseFee.OperationType.WITHDRAW,
+            financial_zone=BaseFee.FinancialZone.EUROPE,
+        )
+        max_available_fee, fee_data = cls._wallet_get_withdraw_fee_info(
+            base_fee=base_fee,
+            actual_balance=actual_balance,
+            currency=wallet.currency,
+        )
+        return {
+            'balance': actual_balance,
+            'available_amount': cls._wallet_get_withdraw_available_amount(
+                actual_balance=actual_balance,
+                max_available_fee=max_available_fee,
+            ),
+            'fee': fee_data,
+        }
+
+    @classmethod
+    def _wallet_get_withdraw_fee_info(
+        cls,
+        base_fee: BaseFee,
+        actual_balance: Decimal,
+        currency: str,
+    ) -> Tuple[Decimal, dict]:
+        if fee := getattr(base_fee, 'percentage_fee', None):
+            max_available_fee = actual_balance - (actual_balance * 100) / (100 + fee.amount)
+            fee_data = {
+                'type': 'percentage',
+                'amount': fee.amount,
+                'min_amount': fee.min_amount.amount,
+                'max_amount': fee.max_amount.amount,
+                'currency': currency,
+            }
+        elif fee := getattr(base_fee, 'fixed_fee', None):
+            max_available_fee = cls._get_fixed_fee(base_fee, currency)
+            fee_data = {
+                'type': 'fixed',
+                'amount': fee.amount.amount,
+                'currency': currency,
+            }
+        else:
+            raise ValueError(cls.Error.INVALID_BASE_FEE)
+
+        return max_available_fee, fee_data
+
+    @classmethod
+    def _wallet_get_withdraw_available_amount(
+        cls,
+        actual_balance: Decimal,
+        max_available_fee: Decimal,
+    ) -> Decimal:
+        available_amount = Decimal(actual_balance - max_available_fee).quantize(
+            exp=cls.AVAILABLE_AMOUNT_ROUNDING_FORMAT,
+            rounding=ROUND_DOWN,
+        )
+        return available_amount if available_amount > 0 else Decimal(0)
 ```
