@@ -38,6 +38,8 @@
       - [Нейминг фабрик](#нейминг-фабрик)
   - [Нейминг тестов](#нейминг-тестов)
     - [Пример](#пример-1)
+- [Celery](#celery)
+- [Периодические таски](#периодические-таски)
 
 ## Общее
 
@@ -725,4 +727,67 @@ def test_user_sms_add_phone_success(api_client, mocker, url):
     assert response.status_code == 200
     assert response.data['sms_lifetime'] is not None
     assert response.data['seconds_till_next_request'] is not None
+```
+
+## Celery
+Используем [Celery](https://github.com/celery/celery) для следующих задач:
+- действия производимые с помощью внешних сервисов: отправка email, уведомлений и т.д.
+- оффлоад тяжелых, вычислительных задач
+- периодические задачи (с помощью [celery-beat](https://docs.celeryproject.org/en/stable/userguide/periodic-tasks.html#introduction) и [django-celery-beat](https://github.com/celery/django-celery-beat))
+
+Что может происходить в **Celery** тасках:
+- вызов публичного метода какого-либо сервиса
+
+Ничего больше, так как **Celery** как и View и ViewSet-ы является интерфейсом для нашей бизнес-логики. Исключением будут только [chained таски](https://docs.celeryproject.org/en/stable/userguide/canvas.html#chains) или [chord-ы](https://docs.celeryproject.org/en/stable/userguide/canvas.html#chords), где таски имеют общее состояние или передают друг в друга данные.
+
+**Реализация и расположение в структуре проекта**:
+- таски хранятся в пакете `tasks`
+- каждая таска должна быть именованной через `@app.task(name='task_name')`, это поможет избежать неявности в нейминге, так как по дефолту, Celery задает название как абсолютный путь к таске из корня проекта
+- шаблон для нейминга - `<service_method>_task`, `<service_method>` - название метода, который вызывается из сервиса
+- разделяем группы тасок по модулям, каждый модуль это название сущности для которой таски будут выполняться или элемент бизнес-логики, не являющийся непосредственной сущностью
+
+**Пример таски**:
+```python
+from config.celery import app
+from ..services import DailyBalanceService
+
+
+@app.task(name='create_daily_balances_task')
+def create_daily_balances_task() -> None:
+    DailyBalanceCreationService.create_daily_balances()
+```
+
+## Периодические таски
+Используем [celery-beat](https://docs.celeryproject.org/en/stable/userguide/periodic-tasks.html#introduction) и [django-celery-beat](https://github.com/celery/django-celery-beat).
+Конфиг периодических задач обычно находиться там, где происходит инициализация Celery.
+
+**Пример конфига**:
+```python
+from __future__ import absolute_import
+
+import os
+
+from celery import Celery
+from celery.schedules import crontab
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+
+app = Celery('config')
+app.config_from_object('django.conf:settings', namespace='CELERY')
+app.autodiscover_tasks()
+
+app.conf.beat_schedule = {
+    'application_document_delete_unused_task': {
+        'task': 'application_document_delete_unused_task',
+        'schedule': crontab(hour=1, minute=0),
+    },
+    'update_exchange_rates': {
+        'task': 'update_exchange_rates_task',
+        'schedule': crontab(hour=0, minute=0),
+    },
+    'wallet_create_daily_balances': {
+        'task': 'create_daily_balances_task',
+        'schedule': crontab(hour=0, minute=30),
+    },
+}
 ```
