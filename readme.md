@@ -32,6 +32,12 @@
 - [Вызов исключений и обработка ошибок](#вызов-исключений-и-обработка-ошибок)
   - [Кастомные классы исключений](#кастомные-классы-исключений)
 - [URLS](#urls)
+- [Тестирование](#тестирование)
+  - [Генерация данных для тестов](#генерация-данных-для-тестов)
+    - [Фабрики](#фабрики)
+      - [Нейминг фабрик](#нейминг-фабрик)
+  - [Нейминг тестов](#нейминг-тестов)
+    - [Пример](#пример-1)
 
 ## Общее
 
@@ -683,4 +689,40 @@ urlpatterns = (
     path('auth/totp/confirm/<int:device_id>/', TOTPConfirmAPIView.as_view(), name='totp-confirm'),
     path('auth/totp/delete/<int:pk>/', TOTPDeleteAPIView.as_view(), name='totp-destroy'),
 )
+```
+
+
+## Тестирование
+Для тестирования используем могучий [pytest](https://github.com/pytest-dev/pytest), плюс необходимые плагины.
+
+### Генерация данных для тестов
+Рабочим решением является [factoryboy](https://github.com/FactoryBoy/factory_boy), который позиционирует себя как замена захардкоженным фикстурам и даёт возможность создавать легковесные фабрики моделей.
+
+Также **factoryboy** включает в себя [faker](https://github.com/joke2k/faker), через него происходит генерация данных для полей факторий.
+
+#### Фабрики
+- каждая модель должна иметь свою фабрику
+- генерация фейковых данных должна быть максимально реалистичной, в этом поможет [документация faker](https://faker.readthedocs.io/en/master/)
+- хранятся в том же пакете, что и тесты
+
+##### Нейминг фабрик
+Шаблон для нейминга фабрик - `<Entity>Factory`, `Entity` - название модели для которой фабрика пишется.
+
+### Нейминг тестов
+Шаблон - `test_<entity>_<action>_<result>`. Например `test_user_sms_add_phone_success()`, в этом случае `user_sms` - `<entity>`, сущность для которой тест пишется. `add_phone` - `<action>`, действие производящееся над тестируемой сущностью. И `success` - `<result>`, ожидаемый результат.
+
+#### Пример
+
+```python
+@pytest.mark.django_db
+def test_user_sms_add_phone_success(api_client, mocker, url):
+    user = UserFactory(is_active=True)
+
+    api_client.force_authenticate(user)
+    mocker.patch('apps.common.tasks.sms.send_sms.delay', return_value=None)
+
+    response = api_client.post(url, {'phone_number': FactoryService.phone_number()})
+    assert response.status_code == 200
+    assert response.data['sms_lifetime'] is not None
+    assert response.data['seconds_till_next_request'] is not None
 ```
