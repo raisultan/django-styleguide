@@ -31,6 +31,7 @@
   - [Serializers](#serializers)
 - [Вызов исключений и обработка ошибок](#вызов-исключений-и-обработка-ошибок)
   - [Кастомные классы исключений](#кастомные-классы-исключений)
+- [URLS](#urls)
 
 ## Общее
 
@@ -650,3 +651,36 @@ class TransactionViewSet(ModelViewSet):
 ### Кастомные классы исключений
 Создание кастомных классов исключений оправдывают себя только если ваша бизнес-логика базируется на отлове и обработке специфичных для вашего юс-кейса исключений. Например, элемент бизнес-логики проводит интеграцию с внешним миром, предположим это провайдер банковских услуг. Соответственно, провайдер может вызвать исключительную ситуацию, основываясь на которой определенный сервис должен выполнить специфичное действие, при таких кейсах кастомные исключения приветствуются.
 Покрывать всю кодовую базу кастомными классами ошибок излишне, так как стандартная библиотека Python и так даёт простые, но в тоже время предельно понятные типы исключений, которые применимы в большинстве случаев.
+
+## URLS
+
+Для ViewSet и View в `urls.py`:
+- не забываем задать `basename` и `name` для вьюсетов и вью, соответственно
+- группируем эндпоинты по неймспейсам
+
+**Пример**:
+```python
+from .views import (
+    ApplicationDocumentViewSet, TokenObtainPairView, TokenVerifyView, TOTPAddAPIView,
+    TOTPConfirmAPIView, TOTPDeleteAPIView, TOTPListAPIView, UserApplicationViewSet, UserViewSet,
+)
+
+router = DefaultRouter()
+router.register('users', UserViewSet, 'users')
+router.register('application_documents', ApplicationDocumentViewSet, 'application_documents')
+router.register('applications', UserApplicationViewSet, 'applications')
+
+
+urlpatterns = (
+    path('auth/', include(router.urls)),
+
+    path('auth/jwt/create/', TokenObtainPairView.as_view(), name='jwt-create'),
+    path('auth/jwt/refresh/', TokenRefreshView.as_view(), name='jwt-refresh'),
+    path('auth/jwt/verify/', TokenVerifyView.as_view(), name='jwt-verify'),
+
+    path('auth/totp/add/', TOTPAddAPIView.as_view(), name='totp-create'),
+    path('auth/totp/list/', TOTPListAPIView.as_view(), name='totp-list'),
+    path('auth/totp/confirm/<int:device_id>/', TOTPConfirmAPIView.as_view(), name='totp-confirm'),
+    path('auth/totp/delete/<int:pk>/', TOTPDeleteAPIView.as_view(), name='totp-destroy'),
+)
+```
