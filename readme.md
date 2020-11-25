@@ -666,9 +666,9 @@ from .views import (
 )
 
 router = DefaultRouter()
-router.register('users', UserViewSet, 'users')
-router.register('application_documents', ApplicationDocumentViewSet, 'application_documents')
-router.register('applications', UserApplicationViewSet, 'applications')
+router.register('users', UserViewSet, basename='users')
+router.register('application_documents', ApplicationDocumentViewSet, basename='application_documents')
+router.register('applications', UserApplicationViewSet, basename='applications')
 
 
 urlpatterns = (
