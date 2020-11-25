@@ -39,7 +39,9 @@
   - [Нейминг тестов](#нейминг-тестов)
     - [Пример](#пример-1)
 - [Celery](#celery)
-- [Периодические таски](#периодические-таски)
+  - [Периодические таски](#периодические-таски)
+- [Вещи, которые не стоит забывать при разработке](#вещи-которые-не-стоит-забывать-при-разработке)
+- [Источники вдохновения](#источники-вдохновения)
 
 ## Общее
 
@@ -757,7 +759,7 @@ def create_daily_balances_task() -> None:
     DailyBalanceCreationService.create_daily_balances()
 ```
 
-## Периодические таски
+### Периодические таски
 Используем [celery-beat](https://docs.celeryproject.org/en/stable/userguide/periodic-tasks.html#introduction) и [django-celery-beat](https://github.com/celery/django-celery-beat).
 Конфиг периодических задач обычно находиться там, где происходит инициализация Celery.
 
@@ -791,3 +793,21 @@ app.conf.beat_schedule = {
     },
 }
 ```
+
+## Вещи, которые не стоит забывать при разработке
+- [Дзен Python](https://www.python.org/dev/peps/pep-0020/)
+- [SOLID](https://github.com/heykarimoff/solid.python)
+- [SoC](https://nalexn.github.io/separation-of-concerns/)
+- всегда держите в уме, что код намного больше раз читается, чем пишется
+- старайтесь придерживаться простоты и лаконичности, не стоит мудрить и усложнять код с целью уменьшения количества строк кода, когда можно написать просто, если даже это будет чуть больше чем первый вариант
+- не придумывайте велосипеды, используйте инструменты из стандартной библиотеки Python, имеющиеся тулзы Django, если нужно и оправдано, то используйте `3rd party` библиотеки с высоким рейтингом
+- проводите ревью своего кода перед коммитом
+
+## Источники вдохновения
+- [Chromium OS Python Style Guid](https://chromium.googlesource.com/chromiumos/docs/+/master/styleguide/python.md)
+- [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
+- [PEP8](https://www.python.org/dev/peps/pep-0008/)
+- [best-doctor/python-styleguide](https://github.com/best-doctor/guides/blob/master/guides/python_styleguide.md)
+- [HackSoftware/Django-Styleguid](https://github.com/HackSoftware/Django-Styleguide#inspiration)
+
+> Этот стайлгайд не позиционирует себя и не является набором постулатов, по которым нужно разрабатывать Django приложения. И не для каждого продукта, такой подход подойдет. Любое правило или соглашение из стайлгайда можно нарушить, при наличии весомого аргумента. Любой фидбек и предложения по корректировке приветствуются.
