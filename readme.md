@@ -751,7 +751,7 @@ def test_user_sms_add_phone_success(api_client, mocker, url):
 **Пример таски**:
 ```python
 from config.celery import app
-from ..services import DailyBalanceService
+from ..services import DailyBalanceCreationService
 
 
 @app.task(name='create_daily_balances_task')
