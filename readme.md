@@ -55,7 +55,7 @@
 * В свойствах (`property`) модели (с некоторыми исключениями).
 
 **В Django, бизнес-логика не должна быть в:**
-* В контроллерах - Views, ViewSets.
+* В контроллерах - Views, APIViews, ViewSets.
 * В сериалайзерах и формах.
 * В методе `save` модели.
 
@@ -135,10 +135,10 @@ from .wallet_balance import WalletBalanceService
 #### Метод format:
 ```python
 class TransactionError:
-    INSUFFICIENT_FUNDS = 'Insufficient funds on sender wallet, {amount}{currency} needed'
+    INSUFFICIENT_FUNDS_TEMPLATE = 'Insufficient funds on sender wallet, {amount}{currency} needed'
 
 # использование
-TransactionError.INSUFFICIENT_FUNDS.format(amount=189.0, currency='EUR')
+TransactionError.INSUFFICIENT_FUNDS_TEMPLATE.format(amount=189.0, currency='EUR')
 ```
 
 #### f-strings:
@@ -162,7 +162,7 @@ class Transaction(models.Model):
     amount = MoneyField()
     ...
 
-    def clean(self) -> None:
+    def clean(self) -> NoReturn:
         super().clean()
         TransactionValidationService.validate(transaction=self)
 ```
@@ -171,7 +171,7 @@ class Transaction(models.Model):
 ```python
 class TransactionValidationService:
     @staticmethod
-    def validate(transaction: Any) -> None: # несоответствие с фактическим типом
+    def validate(transaction: Any) -> NoReturn: # несоответствие с фактическим типом
         ...
 ```
 В этом случае, при попытке импорта модели транзакции в сервис валидации, произойдет `ImportError`, а именно ошибка циклического импорта.
@@ -277,6 +277,7 @@ if (
 - поля выборки должны быть реализованы через [Enum типы Django](https://docs.djangoproject.com/en/3.1/ref/models/fields/#enumeration-types)
 - все аргументы полей должны передаваться как именованные (kwargs)
 - каждая модель должна иметь свою реализацию метода `__str__()`
+- каждая модель должна иметь `class Meta`, который в самом упрощенном кейсе имеет `verbose_name` и `verbose_name_plural` для модели
 
 ### Валидация моделей
 Если кастомную валидацию модели возможно реализовать через [constraints](https://docs.djangoproject.com/en/3.1/ref/models/constraints/) или [валидаторами](https://docs.djangoproject.com/en/3.1/ref/validators/) Django, то этот вариант будет лучше. В противоположном случае, стоит учесть несколько пунктов:
@@ -641,7 +642,7 @@ class TransactionViewSet(ModelViewSet):
 ```
 
 ### Serializers
-С сериалайзерами всё просто, если данные относятся к модели то используем `ModelSerializer`, иначе `Serializer`.
+С сериалайзерами всё просто, если данные относятся к модели то используем `ModelSerializer`, иначе `Serializer`. Также, стоит не забывать, что названия сериалайзеров должны оканчиваться постфиксом `Serializer`.
 
 Сериалайзеры могут содержать:
 - валидацию данных
@@ -755,7 +756,7 @@ from ..services import DailyBalanceCreationService
 
 
 @app.task(name='create_daily_balances_task')
-def create_daily_balances_task() -> None:
+def create_daily_balances_task() -> NoReturn:
     DailyBalanceCreationService.create_daily_balances()
 ```
 
